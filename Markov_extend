@@ -1,0 +1,231 @@
+data_2d=e;
+n_layer=20;
+n_expand=200;
+
+[data_expand_real,f,p,data_interval]=real_expand(data_2d,n_layer,n_expand);
+data_expand_real_smooth=data_smooth(data_expand_real);
+data_expand_gain=data_gain(data_2d,data_expand_real_smooth);
+figure(1)
+imagesc(data_expand_gain)
+figure(2)
+imagesc(e)
+
+
+function data_expand_gain=data_gain(data_2d,data_expand_real_smooth)
+%平滑后导致数据变集中，所以将数据集体增益
+ratio=(max(max(data_2d))-mean2(data_2d))/(max(max(data_expand_real_smooth))-mean2(data_expand_real_smooth));
+data_expand_gain=(data_expand_real_smooth-mean2(data_expand_real_smooth)).*ratio+mean2(data_expand_real_smooth);
+end
+
+
+
+function data_expand_real_smooth=data_smooth(data_expand_real)
+%对拓展后的网格进行平滑处理
+hw=3;%平滑网格数
+for i=1+hw:size(data_expand_real,1)-hw
+    for j=1+hw:size(data_expand_real,2)-hw
+        wi=data_expand_real(i-hw:i+hw,j-hw:j+hw);
+        data_expand_real_smooth(i-hw,j-hw)=mean2(wi);
+    end
+end
+        
+end
+
+
+
+function [data_expand_real,f,p,data_interval]=real_expand(data_2d,n_layer,n_expand)
+%此函数是将标准矩阵转化回原始格式，然后将每一行拼起来组成矩阵
+%data_2d是原始数据,n_layer是分层数,n_expand是拓展的单位数 
+%data_expand_real是真实的拓展结果,f是总的转移次数矩阵,p是总的转移概率矩阵,data_interval是分成的间隔
+
+
+%进行标准化处理
+[data_transform_2d,data_min,data_interval ]= transform_rawdata(data_2d,n_layer);
+%生成转移概率矩阵
+[f,p]=probability_generate( data_transform_2d, n_layer);
+
+
+
+
+%进行每一行的拓展，然后变回原始格式，最后拼接
+
+
+%先进行第一行的拓展，需要expand_data函数
+data_transform_row=data_transform_2d(1,:);
+%该行为拓展行
+data_expand_row =expand_data(data_transform_row,n_expand,n_layer,p);
+
+
+data_expand_row_real=data_min+data_expand_row*data_interval;
+data_expand_real(1,:)=data_expand_row_real;
+
+%再进行后面行的拓展，需要expand_data_after函数
+for row=2:size(data_transform_2d,1)
+    data_transform_row=data_transform_2d(row,:);
+    %该行为拓展行
+    data_expand_row =expand_data_after(data_transform_row,n_expand,n_layer,p,data_expand_row);
+    
+    
+    data_expand_row_real=data_min+data_expand_row*data_interval;
+    data_expand_real(row,:)=data_expand_row_real;
+end
+    
+
+
+
+end
+
+
+
+function data_expand_row =expand_data(data_transform_row,n_expand,n_layer,p)
+%此函数进行单行拓展（是四个数组合的，如果改成更多组需要修改）
+%data_transform_row是单行的数据,n_expand是拓展多个各单位,n_layer是分了多少层,p是转移概率矩阵
+
+data_end=data_transform_row(end-2:end);%抽原始转换后的标准模型的后三个数
+
+%若后三个数全为0，则全设为1
+if sum(data_end==0)
+    data_end(1:end)=1;
+end
+
+
+data_expand_row=[data_end];
+%根据转移概率进行拓展
+for i=1:n_expand
+    p_cumsum=cumsum(p(data_expand_row(i),data_expand_row(i+1),data_expand_row(i+2),:));%转移概率累加
+    p_cumsum_reshape=reshape(p_cumsum,1,n_layer);%重新整形
+    
+    %判断该处分栏是不是全为0，若是全为0则把最后一个设为1
+    if sum(p_cumsum_reshape)==0
+        p_cumsum_reshape(end)=1;
+    end
+    
+    data_expand_row(i+3)=discretize(rand(),[0 p_cumsum_reshape]);%按照概率进行拓展
+end
+data_expand_row=data_expand_row(4:end);%把前三个剔除
+end
+
+
+
+
+
+function data_expand_row =expand_data_after(data_transform_row,n_expand,n_layer,p,data_expand_row)
+%此函数进行单行拓展（是四个数组合的，如果改成更多组需要修改）
+%data_transform_row是单行的数据,n_expand是拓展多个各单位,n_layer是分了多少层,p是转移概率矩阵
+
+data_end=data_transform_row(end-2:end);%抽原始转换后的标准模型的后三个数
+data_expand_row_last=data_expand_row;%把第一行的数据变成last
+%若后三个数全为0，则全设为1
+if sum(data_end==0)
+    data_end(1:end)=1;
+end
+
+
+data_expand_row=[data_end];
+%根据转移概率进行拓展
+for i=1:n_expand
+    p_cumsum=cumsum(p(data_expand_row(i),data_expand_row(i+1),data_expand_row(i+2),:));%转移概率累加
+    p_cumsum_reshape=reshape(p_cumsum,1,n_layer);%重新整形
+    
+    %判断该处分栏是不是全为0，若是全为0则把最后一个设为1
+    if sum(p_cumsum_reshape)==0
+        p_cumsum_reshape(end)=1;
+    end
+    
+    %如果本元素与上一元素相差太远，则重复计算
+    num=0;
+    while num<=50
+        num=num+1;
+        data_expand_row(i+3)=discretize(rand(),[0 p_cumsum_reshape]);%按照概率进行拓展
+        if abs(data_expand_row(i+3)-data_expand_row_last(i))<=n_layer/8%通过此行来限定
+            break;
+        end
+    end
+            
+    
+    
+    
+end
+data_expand_row=data_expand_row(4:end);%把前三个剔除
+end
+
+
+
+
+
+
+
+
+
+
+function [f,p]=probability_generate( data_transform_2d, n_layer)
+%data_transform为转换为标准格式的数据   n_layer为分的层数
+%p 标准格式数据的转移概率,f是标准格式的转移矩阵
+%本函数是四组数的概率算法
+
+
+%计算转移次数分布f
+% f=zeros(n_layer,n_layer,n_layer);
+%分配空间
+f=zeros(n_layer,n_layer,n_layer,n_layer);
+f_row=zeros(n_layer,n_layer,n_layer,n_layer);
+%计算全部转移次数
+for row=1:size(data_transform_2d,1)
+    %计算每一行的转移次数
+    for i=1:n_layer
+        for j=1:n_layer
+            for k=1:n_layer
+                for n=1:n_layer
+                    f_row(i,j,k,n)=length(findstr([i j k n],data_transform_2d(row,:)));
+                end
+            end
+        end
+    end
+    f=f+f_row;
+end
+
+
+%计算转移概率p
+
+%分配空间
+p=zeros(n_layer,n_layer,n_layer,n_layer);
+%开始计算转移概率
+for i=1:n_layer
+    for j=1:n_layer
+        for k=1:n_layer
+            f_sum=sum(f(i,j,k,:));
+            
+            %避免出现全都没有的情况
+            if f_sum==0
+                f_sum=1;
+            end
+            
+            p(i,j,k,:)=f(i,j,k,:)/f_sum;
+        end
+    end
+end
+end
+
+
+
+
+
+
+function [data_transform_2d,data_min,data_interval ]= transform_rawdata(data_2d,n_layer)
+%用来对整个矩阵进行层数划分
+%输入：data_2d是原始数据，n_layer是要划分多个层（太多的话计算缓慢）
+%输出：data_transform_2d是转换完的12345数据,data_min是矩阵最小值,data_interval是取值间隔
+
+%求最大最小和间隔值
+data_max=max(max(data_2d));
+data_min=min(min(data_2d));
+data_interval=(data_max-data_min)/n_layer;
+
+%把原始数据转换为标准矩阵
+data_transform_2d=zeros(size(data_2d,1),size(data_2d,2));%预先分配空间
+for i=1:size(data_2d,1)
+    for j=1:size(data_2d,2)
+        data_transform_2d(i,j)=ceil((data_2d(i,j)-data_min)/data_interval);%data_transform_2d为标准整数型的间隔数
+    end
+end
+end
